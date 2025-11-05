@@ -65,39 +65,27 @@ jobs:
           git remote set-url origin https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
           git push -u origin "$BRANCH_NAME"
 
-      - name: Open PR (create)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # or PAT/App token if your org blocks GITHUB_TOKEN
-        run: |
-          set -euo pipefail
-          gh --version
-          gh pr create \
-            --title "chore(release): version bump" \
-            --body  "Automated version bump triggered by $GITHUB_ACTOR." \
-            --base  main \
-            --head  "$BRANCH_NAME"
-
-      - name: Verify PR & print URL (cleanup on missing)
+      - name: Open PR (create; cleanup branch on failure)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          gh --version
 
-          # Try to view PR by branch (positional arg, not --head)
-          url=$(gh pr view "$BRANCH_NAME" --json url --jq .url 2>/dev/null || true)
+          if gh pr create \
+            --title "chore(release): version bump" \
+            --body  "Automated version bump triggered by $GITHUB_ACTOR." \
+            --base  main \
+            --head  "$BRANCH_NAME"
+          then
+            echo "✅ PR created successfully."
+          else
+            echo "❌ PR creation failed. Cleaning up branch: $BRANCH_NAME"
 
-          # Fallback: list PRs by head branch and grab the first open one
-          if [ -z "${url:-}" ]; then
-            url=$(gh pr list --head "$BRANCH_NAME" --state open --json url --jq '.[0].url' 2>/dev/null || true)
-          fi
-
-          if [ -z "${url:-}" ]; then
-            echo "PR not created (blocked or missing). Cleaning up branch: $BRANCH_NAME"
-
-            # Ensure remote is authenticated so deletion works
+            # Ensure authenticated remote for deletion
             git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
-            # Detach HEAD to safely delete local branch
+            # Detach HEAD so we can delete the local branch safely
             git checkout --detach >/dev/null 2>&1 || true
 
             # Delete remote & local branch (ignore if already gone)
@@ -106,5 +94,3 @@ jobs:
 
             exit 1
           fi
-
-          echo "PR URL: $url"
