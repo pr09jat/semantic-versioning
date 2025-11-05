@@ -70,8 +70,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh --version
-
           if gh pr create \
             --title "chore(release): version bump" \
             --body  "Automated version bump triggered by $GITHUB_ACTOR." \

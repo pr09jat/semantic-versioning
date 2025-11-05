@@ -9,13 +9,45 @@ permissions:
 jobs:
   create_release:
     runs-on: ubuntu-latest
-    environment: dev 
 
     steps:
+      - name: Check if user is allowed (based on CODEOWNERS)
+        id: check_access
+        run: |
+          echo "🔍 Checking CODEOWNERS access for $GITHUB_ACTOR"
+
+          # Try to find CODEOWNERS file
+          CODEOWNERS_FILE=""
+          for path in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do
+            if [ -f "$path" ]; then
+              CODEOWNERS_FILE="$path"
+              break
+            fi
+          done
+
+          if [ -z "$CODEOWNERS_FILE" ]; then
+            echo "❌ CODEOWNERS file not found."
+            exit 1
+          fi
+
+          echo "📄 Found CODEOWNERS at: $CODEOWNERS_FILE"
+
+          # Extract all usernames from CODEOWNERS (lines starting with @)
+          ALLOWED_USERS=$(grep -o '@[A-Za-z0-9_.-]*' "$CODEOWNERS_FILE" | sed 's/@//g' | sort -u)
+          echo "Allowed users from CODEOWNERS:"
+          echo "$ALLOWED_USERS"
+
+          # Check if actor is in the list
+          if echo "$ALLOWED_USERS" | grep -q "^${GITHUB_ACTOR}$"; then
+            echo "✅ Access granted"
+          else
+            echo "🚫 Access denied: $GITHUB_ACTOR is not in CODEOWNERS"
+            exit 1
+          fi
       - name: Validate source branch
         run: |
-          if [[ ! "${{ github.ref_name }}" =~ ^release/ ]]; then
-            echo "🚫 Invalid branch. Only branches starting with 'release/' are allowed."
+          if [[ ! "${{ github.ref_name }}" =~ ^release/sprint ]]; then
+            echo "🚫 Invalid branch. Only branches starting with 'release/sprint' are allowed."
             exit 1
           fi
           echo "✅ Branch validated: ${{ github.ref_name }}"
@@ -59,23 +91,11 @@ jobs:
             echo "✅ New version detected: $CURRENT (latest was $LATEST)"
           fi
 
-      - name: Verify GH_ACTION_PAT (safe check)
-        run: |
-          if [ -z "${{ secrets.GH_ACTION_PAT }}" ]; then
-            echo "❌ GH_ACTION_PAT is not available"
-            exit 1
-          else
-            echo "✅ GH_ACTION_PAT is available (not showing value)"
-            gh auth status || gh auth login --with-token <<< "${{ secrets.GH_ACTION_PAT }}"
-          fi
-        env:
-          GH_ACTION_PAT: ${{ secrets.GH_ACTION_PAT }}
-
       - name: Create Git tag and release
         env:
           VERSION: ${{ steps.version.outputs.version }}
           LATEST_TAG: ${{ steps.latest.outputs.latest_tag }}
-          GITHUB_TOKEN: ${{ secrets.GH_ACTION_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "🏷️ Creating new tag: $VERSION"
           git config user.name "github-actions[bot]"
@@ -100,7 +120,7 @@ jobs:
               2>/dev/null || echo "")
 
             if [ -z "$NOTES" ]; then
-              NOTES="No pull requests merged between $PREVIOUS_TAG and $VERSION."
+              NOTES=""
             else
               NOTES="## What's Changed\n${NOTES}"
             fi
