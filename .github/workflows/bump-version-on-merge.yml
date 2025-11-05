@@ -67,7 +67,7 @@ jobs:
 
       - name: Open PR (create)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # or a PAT/App token if your org blocks GITHUB_TOKEN
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # or PAT/App token if your org blocks GITHUB_TOKEN
         run: |
           set -euo pipefail
           gh --version
@@ -77,11 +77,34 @@ jobs:
             --base  main \
             --head  "$BRANCH_NAME"
 
-      - name: Verify PR & print URL
+      - name: Verify PR & print URL (cleanup on missing)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          url=$(gh pr view --head "$BRANCH_NAME" --json url --jq .url)
-          test -n "$url" || { echo "PR not created (blocked or missing)."; exit 1; }
+
+          # Try to view PR by branch (positional arg, not --head)
+          url=$(gh pr view "$BRANCH_NAME" --json url --jq .url 2>/dev/null || true)
+
+          # Fallback: list PRs by head branch and grab the first open one
+          if [ -z "${url:-}" ]; then
+            url=$(gh pr list --head "$BRANCH_NAME" --state open --json url --jq '.[0].url' 2>/dev/null || true)
+          fi
+
+          if [ -z "${url:-}" ]; then
+            echo "PR not created (blocked or missing). Cleaning up branch: $BRANCH_NAME"
+
+            # Ensure remote is authenticated so deletion works
+            git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+            # Detach HEAD to safely delete local branch
+            git checkout --detach >/dev/null 2>&1 || true
+
+            # Delete remote & local branch (ignore if already gone)
+            git push origin --delete "$BRANCH_NAME" || echo "Remote branch not found."
+            git branch -D "$BRANCH_NAME" || echo "Local branch not found."
+
+            exit 1
+          fi
+
           echo "PR URL: $url"
