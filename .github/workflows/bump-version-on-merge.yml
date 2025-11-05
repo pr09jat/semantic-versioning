@@ -59,7 +59,7 @@ jobs:
 
       - name: Push version bump branch
         run: |
-          git remote set-url origin https://${{ github.actor }}:${{ secrets.PR09JAT_PAT }}@github.com/${{ github.repository }}.git
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
           git push origin version-bump
 
       - name: Create pull request for version bump
