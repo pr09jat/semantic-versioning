@@ -47,7 +47,7 @@ jobs:
 
       - name: Create a new branch for version bump
         run: |
-          git checkout -b version-bump origini/main
+          git checkout -b version-bump origin/main
           git pull
           # Bump version
           case "${{ github.event.inputs.bump }}" in
