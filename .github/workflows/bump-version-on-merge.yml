@@ -8,67 +8,69 @@ on:
         required: true
         default: "patch"
         type: choice
-        options:
-          - major
-          - minor
-          - patch
+        options: [major, minor, patch]
 
 permissions:
-  contents: write # Allows pushing changes
+  contents: write # push branch
+  pull-requests: write # create PR
 
 jobs:
   bump:
     runs-on: ubuntu-latest
+    env:
+      BRANCH_NAME: version-bump/${{ github.actor }}/${{ github.run_id }}
+
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          persist-credentials: false # Disable GITHUB_TOKEN auth to prevent issues
-          fetch-depth: 0 # Ensure full history is fetched for version bump
+          fetch-depth: 0
+          fetch-tags: true
+          # keep default credentials so git push over GITHUB_TOKEN works
 
+      # (optional) your CODEOWNERS gate
       - name: Check if user is allowed (based on CODEOWNERS)
-        id: check_access
         run: |
           echo "🔍 Checking CODEOWNERS access for $GITHUB_ACTOR"
           CODEOWNERS_FILE=""
           for path in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do
             if [ -f "$path" ]; then CODEOWNERS_FILE="$path"; break; fi
           done
-          if [ -z "$CODEOWNERS_FILE" ]; then echo "❌ CODEOWNERS file not found"; exit 1; fi
+          if [ -z "$CODEOWNERS_FILE" ]; then echo "❌ CODEOWNERS not found"; exit 1; fi
           ALLOWED_USERS=$(grep -o '@[A-Za-z0-9_.-]*' "$CODEOWNERS_FILE" | sed 's/@//g' | sort -u)
           echo "$ALLOWED_USERS" | grep -q "^${GITHUB_ACTOR}$" || { echo "🚫 $GITHUB_ACTOR not allowed"; exit 1; }
 
-      - uses: astral-sh/setup-uv@v3
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
 
       - name: Configure Git author/committer
         run: |
           git config user.name "${{ github.actor }}"
-          git config user.email "${{ github.actor }}@users.noreply.github.com"
+          git config user.email "${{ github.actor.email }}"
 
-      - name: Create a new branch for version bump
+      - name: Create branch & bump
         run: |
-          git checkout -b version-bump origin/main
-          git pull
-          # Bump version
+          set -euo pipefail
+          git switch -c "$BRANCH_NAME"
           case "${{ github.event.inputs.bump }}" in
             major) FLAG="--major" ;;
             minor) FLAG="--minor" ;;
             *)     FLAG="--patch" ;;
           esac
-          echo "🔹 Bumping version with flag: $FLAG"
+          echo "🔹 Bumping version with: $FLAG"
           uvx bumpver update $FLAG
 
-      - name: Push version bump branch
+      - name: Push branch
         run: |
-          git remote set-url origin https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-          git push origin version-bump
+          git push -u origin "$BRANCH_NAME"
 
-      - name: Create pull request for version bump
-        uses: peter-evans/create-pull-request@v3
-        with:
-          title: "Bump version"
-          body: "Automated version bump"
-          base: main # The branch you're pushing to
-          branch: version-bump # The branch you've created with the version bump
-          assignees: ${{ github.actor }}
-          reviewers: "reviewer-username" # Add your required reviewers here, if needed
+      - name: Open PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --title "chore(release): version bump" \
+            --body  "Automated version bump triggered by $GITHUB_ACTOR." \
+            --base  main \
+            --head  "$BRANCH_NAME" \
+          || echo "PR may already exist."
