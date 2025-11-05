@@ -66,18 +66,15 @@ jobs:
           git push -u origin "$BRANCH_NAME"
 
       - name: Open PR
-        id: cpr
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }} # or RELEASER_PAT/App token
-          base: main
-          branch: ${{ env.BRANCH_NAME }}
-          title: "chore(release): version bump"
-          body: "Automated version bump triggered by ${{ github.actor }}."
-
-      # fail if no PR was created
-      - name: Assert PR created
-        if: ${{ steps.cpr.outputs.pull-request-number == '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # or a PAT/App token
         run: |
-          echo "PR not created (blocked or no changes)."
-          exit 1
+          set -euo pipefail
+          url=$(gh pr create \
+            --title "chore(release): version bump" \
+            --body  "Automated version bump triggered by $GITHUB_ACTOR." \
+            --base  main \
+            --head  "$BRANCH_NAME" \
+            --json url -q .url)
+          test -n "$url" || { echo "PR not created."; exit 1; }
+          echo "PR URL: $url"
