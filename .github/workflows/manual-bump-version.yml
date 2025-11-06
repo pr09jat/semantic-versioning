@@ -7,7 +7,7 @@ on:
         required: true
         default: "patch"
         type: choice
-        options: [dev-increment, major, minor, patch]
+        options: [dev-increment, major, minor, patch, final]
       base_branch:
         description: "Base branch for the PR"
         required: true
@@ -97,20 +97,32 @@ jobs:
           ENVIRON="${{ github.event.inputs.environment }}"
 
           case "$BUMP" in
+            final)
+              if [[ "$ENVIRON" != "production" ]]; then
+                echo "❌ 'final' bump is only allowed on production"
+                exit 1
+              fi
+              CUR="$(read_current)"
+              # Require a pre-release suffix like -dev.N (pattern allows -TAG.NUM)
+              if [[ "$CUR" =~ -[A-Za-z]+\.[0-9]+$ ]]; then
+                echo "🔔 Finalizing pre-release: $CUR → drop suffix"
+                uvx bumpver update --tag=final
+              else
+                echo "❌ Current version is already final ($CUR); nothing to finalize"
+                exit 1
+              fi
+              ;;
+
             dev-increment)
               if [[ "$ENVIRON" == "production" ]]; then
                 echo "❌ dev-increment is not allowed on production"
                 exit 1
               fi
-
               CUR="$(read_current)"
-
               if [[ "$CUR" =~ -dev\.[0-9]+$ ]]; then
-                # Already on dev train → just increment N
                 uvx bumpver update --tag=dev --tag-num
               else
-                # No suffix → bump patch first so new > old, then start dev train
-                echo "❌ dev-increment does not have suffix to increment"
+                echo "❌ dev-increment requires an existing -dev.N suffix (current: $CUR)"
                 exit 1
               fi
               ;;
@@ -123,10 +135,10 @@ jobs:
               esac
 
               if [[ "$ENVIRON" == "production" ]]; then
-                # Clean final version (no pre-release suffix)
+                # Production release with clean final version
                 uvx bumpver update $FLAG --tag=final
               else
-                # Dev train: bump base and ensure -dev.N suffix exists
+                # Development: bump base and ensure -dev.N train
                 uvx bumpver update $FLAG --tag=dev --tag-num
                 NEW="$(read_current)"
                 if [[ ! "$NEW" =~ -dev\.[0-9]+$ ]]; then
