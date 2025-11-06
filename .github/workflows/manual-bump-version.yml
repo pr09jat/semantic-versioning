@@ -1,212 +1,212 @@
-name: Bump Version
+name: Manual Bump Version
 
 on:
-    workflow_dispatch:
-        inputs:
-            bump:
-                description: "Select which part to bump"
-                required: true
-                default: "patch"
-                type: choice
-                options: [major, minor, patch]
-            base_branch:
-                description: "Base branch for the PR"
-                required: true
-                default: "master"
-                type: string
-            environment:
-                description: "Target environment"
-                required: true
-                default: "development"
-                type: choice
-                options: [development, production]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Select which part to bump"
+        required: true
+        default: "patch"
+        type: choice
+        options: [major, minor, patch]
+      base_branch:
+        description: "Base branch for the PR"
+        required: true
+        default: "master"
+        type: string
+      environment:
+        description: "Target environment"
+        required: true
+        default: "development"
+        type: choice
+        options: [development, production]
 
 permissions:
-    contents: write
-    pull-requests: write
+  contents: write
+  pull-requests: write
 
 jobs:
-    bump:
-        runs-on: ubuntu-latest
+  bump:
+    runs-on: ubuntu-latest
+    env:
+      BRANCH_NAME: version-bump/${{ github.actor }}/${{ github.run_id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.base_branch }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Check if user is allowed (based on CODEOWNERS)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "🔍 Checking CODEOWNERS access for ${GITHUB_ACTOR}"
+
+          CODEOWNERS_FILE=""
+          for path in ".github/CODEOWNERS" "CODEOWNERS" "docs/CODEOWNERS"; do
+            if [[ -f "$path" ]]; then
+              CODEOWNERS_FILE="$path"
+              break
+            fi
+          done
+
+          if [[ -z "$CODEOWNERS_FILE" ]]; then
+            echo "❌ CODEOWNERS not found in .github/, root, or docs/"
+            exit 1
+          fi
+
+          echo "📄 Found CODEOWNERS at: ${CODEOWNERS_FILE}"
+
+          # Extract @handles (users or teams); allow by username only
+          ALLOWED_USERS=$(grep -o '@[A-Za-z0-9_.-]\{1,\}\(/[A-Za-z0-9_.-]\{1,\}\)\?' "$CODEOWNERS_FILE" \
+            | sed 's/^@//' \
+            | awk -F/ '{print $1}' \
+            | sort -u)
+
+          echo "Allowed users:"
+          echo "${ALLOWED_USERS}"
+
+          echo "${ALLOWED_USERS}" | grep -qx "${GITHUB_ACTOR}" || { echo "🚫 ${GITHUB_ACTOR} not allowed"; exit 1; }
+
+      - name: Validate base branch exists
+        shell: bash
+        run: |
+          if ! git rev-parse --verify "origin/${{ github.event.inputs.base_branch }}" >/dev/null 2>&1; then
+            echo "❌ Branch '${{ github.event.inputs.base_branch }}' does not exist"
+            exit 1
+          fi
+          echo "✅ Base branch '${{ github.event.inputs.base_branch }}' exists"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Configure Git author/committer
+        shell: bash
+        run: |
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+
+      - name: Determine version strategy
+        id: version_strategy
+        shell: bash
+        run: |
+          if [[ "${{ github.event.inputs.environment }}" == "production" ]]; then
+            if [[ "${{ github.event.inputs.base_branch }}" != "master" ]]; then
+              echo "❌ Production releases must be created from master branch"
+              exit 1
+            fi
+            echo "strategy=production" >> $GITHUB_OUTPUT
+            echo "🎯 Strategy: Production release (clean version)"
+          else
+            echo "strategy=development" >> $GITHUB_OUTPUT
+            echo "🎯 Strategy: Development (pre-release version with -alpha suffix)"
+          fi
+
+      - name: Create branch & bump version
+        id: bump_version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "${{ github.event.inputs.bump }}" in
+            major) FLAG="--major" ;;
+            minor) FLAG="--minor" ;;
+            *)     FLAG="--patch" ;;
+          esac
+
+          if [[ "${{ steps.version_strategy.outputs.strategy }}" == "production" ]]; then
+            CURRENT_VERSION=$(uvx bumpver show --no-fetch | grep "Current Version:" | awk '{print $3}')
+            CLEAN_VERSION=$(echo "$CURRENT_VERSION" | sed 's/-alpha\.[0-9]*$//')
+            
+            IFS='.' read -r major minor patch <<< "$CLEAN_VERSION"
+            case "${{ github.event.inputs.bump }}" in
+              major) NEW_VERSION="$((major + 1)).0.0" ;;
+              minor) NEW_VERSION="${major}.$((minor + 1)).0" ;;
+              *)     NEW_VERSION="${major}.${minor}.$((patch + 1))" ;;
+            esac
+            
+            RELEASE_BRANCH="release/v${NEW_VERSION}"
+            echo "release_branch=$RELEASE_BRANCH" >> $GITHUB_OUTPUT
+            
+            git switch -c "$RELEASE_BRANCH"
+            echo "🔹 Creating release branch: $RELEASE_BRANCH with version $NEW_VERSION"
+            uvx bumpver update $FLAG --set-version "$NEW_VERSION"
+          else
+            git switch -c "$BRANCH_NAME"
+            echo "🔹 Bumping development version with: $FLAG (will add/increment -alpha suffix)"
+            
+            CURRENT_VERSION=$(uvx bumpver show --no-fetch | grep "Current Version:" | awk '{print $3}')
+            
+            if [[ "$CURRENT_VERSION" =~ -alpha\.([0-9]+)$ ]]; then
+              ALPHA_NUM="${BASH_REMATCH[1]}"
+              NEW_ALPHA_NUM=$((ALPHA_NUM + 1))
+              BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/-alpha\.[0-9]*$//')
+              NEW_VERSION="${BASE_VERSION}-alpha.${NEW_ALPHA_NUM}"
+              uvx bumpver update --set-version "$NEW_VERSION"
+            else
+              uvx bumpver update $FLAG
+              NEW_VERSION=$(uvx bumpver show --no-fetch | grep "Current Version:" | awk '{print $3}')
+              NEW_VERSION="${NEW_VERSION}-alpha.1"
+              uvx bumpver update --set-version "$NEW_VERSION"
+            fi
+          fi
+
+      - name: Push branch
+        shell: bash
+        run: |
+          if [[ "${{ steps.version_strategy.outputs.strategy }}" == "production" ]]; then
+            BRANCH_TO_PUSH="${{ steps.bump_version.outputs.release_branch }}"
+          else
+            BRANCH_TO_PUSH="$BRANCH_NAME"
+          fi
+
+          git remote set-url origin https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          git push -u origin "$BRANCH_TO_PUSH"
+
+      - name: Open PR (create; cleanup branch on failure)
+        shell: bash
         env:
-            BRANCH_NAME: version-bump/${{ github.actor }}/${{ github.run_id }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
 
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v4
-              with:
-                  ref: ${{ github.event.inputs.base_branch }}
-                  fetch-depth: 0
-                  fetch-tags: true
+          if [[ "${{ steps.version_strategy.outputs.strategy }}" == "production" ]]; then
+            BRANCH_TO_USE="${{ steps.bump_version.outputs.release_branch }}"
+            PR_TITLE="chore(release): production release - version bump"
+            PR_BODY="🚀 Production release version bump triggered by $GITHUB_ACTOR.
 
-            - name: Check if user is allowed (based on CODEOWNERS)
-              shell: bash
-              run: |
-                  set -euo pipefail
-                  echo "🔍 Checking CODEOWNERS access for ${GITHUB_ACTOR}"
+          This PR creates a new release branch with a clean version number (no pre-release suffix).
 
-                  CODEOWNERS_FILE=""
-                  for path in ".github/CODEOWNERS" "CODEOWNERS" "docs/CODEOWNERS"; do
-                    if [[ -f "$path" ]]; then
-                      CODEOWNERS_FILE="$path"
-                      break
-                    fi
-                  done
+          **Environment:** Production
+          **Base Branch:** ${{ github.event.inputs.base_branch }}
+          **Bump Type:** ${{ github.event.inputs.bump }}"
+          else
+            BRANCH_TO_USE="$BRANCH_NAME"
+            PR_TITLE="chore(release): development version bump"
+            PR_BODY="🔧 Development version bump triggered by $GITHUB_ACTOR.
 
-                  if [[ -z "$CODEOWNERS_FILE" ]]; then
-                    echo "❌ CODEOWNERS not found in .github/, root, or docs/"
-                    exit 1
-                  fi
+          This PR bumps the version with an \`-alpha\` pre-release identifier for development/testing.
 
-                  echo "📄 Found CODEOWNERS at: ${CODEOWNERS_FILE}"
+          **Environment:** Development
+          **Base Branch:** ${{ github.event.inputs.base_branch }}
+          **Bump Type:** ${{ github.event.inputs.bump }}"
+          fi
 
-                  # Extract @handles (users or teams); allow by username only
-                  ALLOWED_USERS=$(grep -o '@[A-Za-z0-9_.-]\{1,\}\(/[A-Za-z0-9_.-]\{1,\}\)\?' "$CODEOWNERS_FILE" \
-                    | sed 's/^@//' \
-                    | awk -F/ '{print $1}' \
-                    | sort -u)
-
-                  echo "Allowed users:"
-                  echo "${ALLOWED_USERS}"
-
-                  echo "${ALLOWED_USERS}" | grep -qx "${GITHUB_ACTOR}" || { echo "🚫 ${GITHUB_ACTOR} not allowed"; exit 1; }
-
-            - name: Validate base branch exists
-              shell: bash
-              run: |
-                  if ! git rev-parse --verify "origin/${{ github.event.inputs.base_branch }}" >/dev/null 2>&1; then
-                    echo "❌ Branch '${{ github.event.inputs.base_branch }}' does not exist"
-                    exit 1
-                  fi
-                  echo "✅ Base branch '${{ github.event.inputs.base_branch }}' exists"
-
-            - name: Setup uv
-              uses: astral-sh/setup-uv@v3
-
-            - name: Configure Git author/committer
-              shell: bash
-              run: |
-                  git config user.name "${{ github.actor }}"
-                  git config user.email "${{ github.actor }}@users.noreply.github.com"
-
-            - name: Determine version strategy
-              id: version_strategy
-              shell: bash
-              run: |
-                  if [[ "${{ github.event.inputs.environment }}" == "production" ]]; then
-                    if [[ "${{ github.event.inputs.base_branch }}" != "master" ]]; then
-                      echo "❌ Production releases must be created from master branch"
-                      exit 1
-                    fi
-                    echo "strategy=production" >> $GITHUB_OUTPUT
-                    echo "🎯 Strategy: Production release (clean version)"
-                  else
-                    echo "strategy=development" >> $GITHUB_OUTPUT
-                    echo "🎯 Strategy: Development (pre-release version with -alpha suffix)"
-                  fi
-
-            - name: Create branch & bump version
-              id: bump_version
-              shell: bash
-              run: |
-                  set -euo pipefail
-
-                  case "${{ github.event.inputs.bump }}" in
-                    major) FLAG="--major" ;;
-                    minor) FLAG="--minor" ;;
-                    *)     FLAG="--patch" ;;
-                  esac
-
-                  if [[ "${{ steps.version_strategy.outputs.strategy }}" == "production" ]]; then
-                    CURRENT_VERSION=$(uvx bumpver show --no-fetch | grep "Current Version:" | awk '{print $3}')
-                    CLEAN_VERSION=$(echo "$CURRENT_VERSION" | sed 's/-alpha\.[0-9]*$//')
-                    
-                    IFS='.' read -r major minor patch <<< "$CLEAN_VERSION"
-                    case "${{ github.event.inputs.bump }}" in
-                      major) NEW_VERSION="$((major + 1)).0.0" ;;
-                      minor) NEW_VERSION="${major}.$((minor + 1)).0" ;;
-                      *)     NEW_VERSION="${major}.${minor}.$((patch + 1))" ;;
-                    esac
-                    
-                    RELEASE_BRANCH="release/v${NEW_VERSION}"
-                    echo "release_branch=$RELEASE_BRANCH" >> $GITHUB_OUTPUT
-                    
-                    git switch -c "$RELEASE_BRANCH"
-                    echo "🔹 Creating release branch: $RELEASE_BRANCH with version $NEW_VERSION"
-                    uvx bumpver update $FLAG --set-version "$NEW_VERSION"
-                  else
-                    git switch -c "$BRANCH_NAME"
-                    echo "🔹 Bumping development version with: $FLAG (will add/increment -alpha suffix)"
-                    
-                    CURRENT_VERSION=$(uvx bumpver show --no-fetch | grep "Current Version:" | awk '{print $3}')
-                    
-                    if [[ "$CURRENT_VERSION" =~ -alpha\.([0-9]+)$ ]]; then
-                      ALPHA_NUM="${BASH_REMATCH[1]}"
-                      NEW_ALPHA_NUM=$((ALPHA_NUM + 1))
-                      BASE_VERSION=$(echo "$CURRENT_VERSION" | sed 's/-alpha\.[0-9]*$//')
-                      NEW_VERSION="${BASE_VERSION}-alpha.${NEW_ALPHA_NUM}"
-                      uvx bumpver update --set-version "$NEW_VERSION"
-                    else
-                      uvx bumpver update $FLAG
-                      NEW_VERSION=$(uvx bumpver show --no-fetch | grep "Current Version:" | awk '{print $3}')
-                      NEW_VERSION="${NEW_VERSION}-alpha.1"
-                      uvx bumpver update --set-version "$NEW_VERSION"
-                    fi
-                  fi
-
-            - name: Push branch
-              shell: bash
-              run: |
-                  if [[ "${{ steps.version_strategy.outputs.strategy }}" == "production" ]]; then
-                    BRANCH_TO_PUSH="${{ steps.bump_version.outputs.release_branch }}"
-                  else
-                    BRANCH_TO_PUSH="$BRANCH_NAME"
-                  fi
-
-                  git remote set-url origin https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-                  git push -u origin "$BRANCH_TO_PUSH"
-
-            - name: Open PR (create; cleanup branch on failure)
-              shell: bash
-              env:
-                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-              run: |
-                  set -euo pipefail
-
-                  if [[ "${{ steps.version_strategy.outputs.strategy }}" == "production" ]]; then
-                    BRANCH_TO_USE="${{ steps.bump_version.outputs.release_branch }}"
-                    PR_TITLE="chore(release): production release - version bump"
-                    PR_BODY="🚀 Production release version bump triggered by $GITHUB_ACTOR.
-
-                  This PR creates a new release branch with a clean version number (no pre-release suffix).
-
-                  **Environment:** Production
-                  **Base Branch:** ${{ github.event.inputs.base_branch }}
-                  **Bump Type:** ${{ github.event.inputs.bump }}"
-                  else
-                    BRANCH_TO_USE="$BRANCH_NAME"
-                    PR_TITLE="chore(release): development version bump"
-                    PR_BODY="🔧 Development version bump triggered by $GITHUB_ACTOR.
-
-                  This PR bumps the version with an \`-alpha\` pre-release identifier for development/testing.
-
-                  **Environment:** Development
-                  **Base Branch:** ${{ github.event.inputs.base_branch }}
-                  **Bump Type:** ${{ github.event.inputs.bump }}"
-                  fi
-
-                  if gh pr create \
-                    --title "$PR_TITLE" \
-                    --body  "$PR_BODY" \
-                    --base  "${{ github.event.inputs.base_branch }}" \
-                    --head  "$BRANCH_TO_USE"
-                  then
-                    echo "✅ PR created successfully."
-                  else
-                    echo "❌ PR creation failed. Cleaning up branch: $BRANCH_TO_USE"
-                    git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-                    git checkout --detach >/dev/null 2>&1 || true
-                    git push origin --delete "$BRANCH_TO_USE" || echo "Remote branch not found."
-                    git branch -D "$BRANCH_TO_USE" || echo "Local branch not found."
-                    exit 1
-                  fi
+          if gh pr create \
+            --title "$PR_TITLE" \
+            --body  "$PR_BODY" \
+            --base  "${{ github.event.inputs.base_branch }}" \
+            --head  "$BRANCH_TO_USE"
+          then
+            echo "✅ PR created successfully."
+          else
+            echo "❌ PR creation failed. Cleaning up branch: $BRANCH_TO_USE"
+            git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            git checkout --detach >/dev/null 2>&1 || true
+            git push origin --delete "$BRANCH_TO_USE" || echo "Remote branch not found."
+            git branch -D "$BRANCH_TO_USE" || echo "Local branch not found."
+            exit 1
+          fi
