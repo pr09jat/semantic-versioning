@@ -1,4 +1,4 @@
-name: Update Version
+name: Bump Version
 
 on:
   workflow_dispatch:
@@ -33,15 +33,36 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
       - name: Check if user is allowed (based on CODEOWNERS)
+        shell: bash
         run: |
-          echo "🔍 Checking CODEOWNERS access for $GITHUB_ACTOR"
+          set -euo pipefail
+          echo "🔍 Checking CODEOWNERS access for ${GITHUB_ACTOR}"
+
           CODEOWNERS_FILE=""
-          for path in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do
-            if [ -f "$path" ]; then CODEOWNERS_FILE="$path"; break; fi
+          for path in ".github/CODEOWNERS" "CODEOWNERS" "docs/CODEOWNERS"; do
+            if [[ -f "$path" ]]; then
+              CODEOWNERS_FILE="$path"
+              break
+            fi
           done
-          if [ -z "$CODEOWNERS_FILE" ]; then echo "❌ CODEOWNERS not found"; exit 1; fi
-          ALLOWED_USERS=$(grep -o '@[A-Za-z0-9_.-]*' "$CODEOWNERS_FILE" | sed 's/@//g' | sort -u)
-          echo "$ALLOWED_USERS" | grep -q "^${GITHUB_ACTOR}$" || { echo "🚫 $GITHUB_ACTOR not allowed"; exit 1; }
+
+          if [[ -z "$CODEOWNERS_FILE" ]]; then
+            echo "❌ CODEOWNERS not found in .github/, root, or docs/"
+            exit 1
+          fi
+
+          echo "📄 Found CODEOWNERS at: ${CODEOWNERS_FILE}"
+
+          # Extract @handles (users or teams); allow by username only
+          ALLOWED_USERS=$(grep -o '@[A-Za-z0-9_.-]\{1,\}\(/[A-Za-z0-9_.-]\{1,\}\)\?' "$CODEOWNERS_FILE" \
+            | sed 's/^@//' \
+            | awk -F/ '{print $1}' \
+            | sort -u)
+
+          echo "Allowed users:"
+          echo "${ALLOWED_USERS}"
+
+          echo "${ALLOWED_USERS}" | grep -qx "${GITHUB_ACTOR}" || { echo "🚫 ${GITHUB_ACTOR} not allowed"; exit 1; }
       - name: Validate base branch exists
         run: |
           if ! git rev-parse --verify "origin/${{ github.event.inputs.base_branch }}" >/dev/null 2>&1; then
