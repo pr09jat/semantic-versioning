@@ -103,7 +103,7 @@ jobs:
                 exit 1
               fi
 
-              UR="$(read_current)"
+              CUR="$(read_current)"
 
               if [[ "$CUR" =~ -dev\.[0-9]+$ ]]; then
                 # Already on dev train → just increment N
