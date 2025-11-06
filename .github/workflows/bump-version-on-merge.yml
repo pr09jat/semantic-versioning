@@ -9,6 +9,11 @@ on:
         default: "patch"
         type: choice
         options: [major, minor, patch]
+      base_branch:
+        description: "Base branch for the PR"
+        required: true
+        default: "master"
+        type: string
 
 permissions:
   contents: write
@@ -24,6 +29,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.base_branch }}
           fetch-depth: 0
           fetch-tags: true
       - name: Check if user is allowed (based on CODEOWNERS)
@@ -36,7 +42,13 @@ jobs:
           if [ -z "$CODEOWNERS_FILE" ]; then echo "❌ CODEOWNERS not found"; exit 1; fi
           ALLOWED_USERS=$(grep -o '@[A-Za-z0-9_.-]*' "$CODEOWNERS_FILE" | sed 's/@//g' | sort -u)
           echo "$ALLOWED_USERS" | grep -q "^${GITHUB_ACTOR}$" || { echo "🚫 $GITHUB_ACTOR not allowed"; exit 1; }
-
+      - name: Validate base branch exists
+        run: |
+          if ! git rev-parse --verify "origin/${{ github.event.inputs.base_branch }}" >/dev/null 2>&1; then
+            echo "❌ Branch '${{ github.event.inputs.base_branch }}' does not exist"
+            exit 1
+          fi
+          echo "✅ Base branch '${{ github.event.inputs.base_branch }}' exists"
       - name: Setup uv
         uses: astral-sh/setup-uv@v3
 
@@ -70,7 +82,7 @@ jobs:
           if gh pr create \
             --title "chore(release): version bump" \
             --body  "Automated version bump triggered by $GITHUB_ACTOR." \
-            --base  master \
+            --base  "${{ github.event.inputs.base_branch }}" \
             --head  "$BRANCH_NAME"
           then
             echo "✅ PR created successfully."
