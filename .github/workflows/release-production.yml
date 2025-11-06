@@ -11,103 +11,113 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check if user is allowed (based on CODEOWNERS)
-        run: |
-          echo "🔍 Checking CODEOWNERS access for $GITHUB_ACTOR"
-          CODEOWNERS_FILE=""
-          for path in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do
-            if [ -f "$path" ]; then CODEOWNERS_FILE="$path"; break; fi
-          done
-          if [ -z "$CODEOWNERS_FILE" ]; then echo "❌ CODEOWNERS not found"; exit 1; fi
-          ALLOWED_USERS=$(grep -o '@[A-Za-z0-9_.-]*' "$CODEOWNERS_FILE" | sed 's/@//g' | sort -u)
-          echo "$ALLOWED_USERS" | grep -q "^${GITHUB_ACTOR}$" || { echo "🚫 $GITHUB_ACTOR not allowed"; exit 1; }
-      - name: Validate source branch
-        run: |
-          if [[ ! "${{ github.ref_name }}" =~ ^release/sprint ]]; then
-            echo "🚫 Invalid branch. Only branches starting with 'release/sprint' are allowed."
-            exit 1
-          fi
-          echo "✅ Branch validated: ${{ github.ref_name }}"
-
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
+          fetch-tags: true
+
+      - name: Check if user is allowed (based on CODEOWNERS)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "🔍 Checking CODEOWNERS access for ${GITHUB_ACTOR}"
+
+          CODEOWNERS_FILE=""
+          for path in ".github/CODEOWNERS" "CODEOWNERS" "docs/CODEOWNERS"; do
+            if [[ -f "$path" ]]; then
+              CODEOWNERS_FILE="$path"
+              break
+            fi
+          done
+
+          if [[ -z "$CODEOWNERS_FILE" ]]; then
+            echo "❌ CODEOWNERS not found in .github/, root, or docs/"
+            exit 1
+          fi
+
+          echo "📄 Found CODEOWNERS at: ${CODEOWNERS_FILE}"
+
+          # Extract @handles (users or teams); allow by username only
+          ALLOWED_USERS=$(grep -o '@[A-Za-z0-9_.-]\{1,\}\(/[A-Za-z0-9_.-]\{1,\}\)\?' "$CODEOWNERS_FILE" \
+            | sed 's/^@//' \
+            | awk -F/ '{print $1}' \
+            | sort -u)
+
+          echo "Allowed users:"
+          echo "${ALLOWED_USERS}"
+
+          echo "${ALLOWED_USERS}" | grep -qx "${GITHUB_ACTOR}" || { echo "🚫 ${GITHUB_ACTOR} not allowed"; exit 1; }
+
+      - name: Validate source branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^release/sprint ]]; then
+            echo "🚫 Invalid branch. Only branches starting with 'release/sprint' are allowed."
+            echo "Ref name was: ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          echo "✅ Branch validated: ${GITHUB_REF_NAME}"
 
       - name: Extract version from file
         id: version
+        shell: bash
         run: |
-          VERSION=$(grep -oP '(?<=__version__ = ")[^"]+' apps/version/__init__.py)
-          if [ -z "$VERSION" ]; then
+          set -euo pipefail
+          VERSION=$(grep -oP '(?<=__version__ = ")[^"]+' apps/version/__init__.py || true)
+          if [[ -z "${VERSION:-}" ]]; then
             echo "❌ Version not found in apps/version/__init__.py"
             exit 1
           fi
-          echo "✅ Found version: $VERSION"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "✅ Found version: ${VERSION}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
       - name: Get latest tag
         id: latest
+        shell: bash
         run: |
+          set -euo pipefail
+          git fetch --tags --force --prune --prune-tags
           LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "none")
-          echo "Latest tag: $LATEST_TAG"
-          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "Latest tag: ${LATEST_TAG}"
+          echo "latest_tag=${LATEST_TAG}" >> "${GITHUB_OUTPUT}"
 
       - name: Compare versions
+        shell: bash
         run: |
+          set -euo pipefail
           CURRENT="${{ steps.version.outputs.version }}"
           LATEST="${{ steps.latest.outputs.latest_tag }}"
-          echo "Comparing $CURRENT with $LATEST"
+          echo "Comparing ${CURRENT} with ${LATEST}"
 
-          if [ "$LATEST" = "none" ]; then
-            echo "🆕 No existing tags, proceeding to create $CURRENT"
-          elif [ "$CURRENT" = "$LATEST" ]; then
-            echo "🚫 Version $CURRENT already exists as tag."
+          if [[ "${LATEST}" == "none" ]]; then
+            echo "🆕 No existing tags, proceeding to create ${CURRENT}"
+          elif [[ "${CURRENT}" == "${LATEST}" ]]; then
+            echo "🚫 Version ${CURRENT} already exists as tag."
             exit 1
           else
-            echo "✅ New version detected: $CURRENT (latest was $LATEST)"
+            echo "✅ New version detected: ${CURRENT} (latest was ${LATEST})"
           fi
-
+      - name: Configure Git author/committer
+        run: |
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
       - name: Create Git tag and release
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          LATEST_TAG: ${{ steps.latest.outputs.latest_tag }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          echo "🏷️ Creating new tag: $VERSION"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$VERSION" -m "$VERSION"
-          git push origin "$VERSION"
+          set -euo pipefail
 
-          echo "📦 Determining previous tag..."
-          PREVIOUS_TAG="${LATEST_TAG:-none}"
-          echo "Previous tag: ${PREVIOUS_TAG:-<none>}"
-
-          echo "🧾 Generating release notes..."
-          if [ -z "$PREVIOUS_TAG" ]; then
-            NOTES="Initial release."
-          else
-            # Fetch merged PRs between previous tag and current tag
-            NOTES=$(gh api repos/${{ github.repository }}/pulls \
-              --jq '.[] | select(.merged_at != null) | 
-              select(.merge_commit_sha as $sha | 
-              inside(["'$(git log --format="%H" ${PREVIOUS_TAG}..$VERSION | tr "\n" "," | sed "s/,$//")'"])) | 
-              "* \(.title) by @\(.user.login) in \(.html_url)"' \
-              2>/dev/null || echo "")
-
-            if [ -z "$NOTES" ]; then
-              NOTES=""
-            else
-              NOTES="## What's Changed\n${NOTES}"
-            fi
-          fi
-
-          echo "🧾 Release Notes:"
-          echo "$NOTES"
+          echo "🏷️ Creating new tag: ${VERSION}"
+          git remote set-url origin https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          git tag -a "${VERSION}" -m "${VERSION}"
+          git push origin "${VERSION}"
 
           echo "🚀 Creating GitHub release..."
-          gh release create "$VERSION" \
-            --title "$VERSION" \
-            --notes "$NOTES" \
+          gh release create "${VERSION}" \
+            --title "${VERSION}" \
             --generate-notes
