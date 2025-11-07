@@ -1,24 +1,9 @@
-[build-system]
-requires = [
-  "setuptools>=69",
-  "wheel"
-]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "bumpver-test"
-version = "2.3.13"
-description = "A minimal Python package configured to use BumpVer (automatic versioning)."
+name = "semantic-versioning"
+version = "0.1.0"
+description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
-authors = [{ name = "Your Name", email = "you@example.com" }]
-keywords = ["versioning", "bumpver"]
-
-[tool.setuptools]
-package-dir = {"" = "app"}
-
-[tool.setuptools.packages.find]
-where = ["app"]
-
-[dependency-groups]
-dev = ["bumpver"]
+dependencies = [
+    "bumpver>=2025.1131",
+]

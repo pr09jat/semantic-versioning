@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12"
 
 [[package]]
@@ -16,21 +16,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/8f/8a/cc13e816e9f0849dc
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1d/5b/2d5ea6802495ee4506721977be522804314aa66ad629d9356e3c7e5af4a6/bumpver-2025.1131-py2.py3-none-any.whl", hash = "sha256:c02527f6ed7887afbc06c07630047b24a9f9d02d544a65639e99bf8b92aaa674", size = 65361, upload-time = "2025-07-02T20:36:10.103Z" },
 ]
-
-[[package]]
-name = "bumpver-test"
-version = "0.1.0"
-source = { editable = "." }
-
-[package.dev-dependencies]
-dev = [
-    { name = "bumpver" },
-]
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [{ name = "bumpver" }]
 
 [[package]]
 name = "click"
@@ -61,6 +46,17 @@ sdist = { url = "https://files.pythonhosted.org/packages/60/0b/28a3f9abc75abbf1f
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cf/e3/35764404a4b7e2021be1f88f42264c2e92e0c4720273559a62461ce64a47/lexid-2021.1006-py2.py3-none-any.whl", hash = "sha256:5526bb5606fd74c7add23320da5f02805bddd7c77916f2dc1943e6bada8605ed", size = 7587, upload-time = "2021-04-02T20:18:33.129Z" },
 ]
+
+[[package]]
+name = "semantic-versioning"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "bumpver" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "bumpver", specifier = ">=2025.1131" }]
 
 [[package]]
 name = "toml"
