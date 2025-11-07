@@ -83,6 +83,21 @@ jobs:
           echo "✅ Found version: ${VERSION}"
           echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
+      - name: Validate version is final (no pre-release suffix)
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Final only: vMAJOR.MINOR.PATCH (no -tag.num, no +build)
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "🚫 Version must be FINAL (vMAJOR.MINOR.PATCH). Found: $VERSION"
+            echo "   Remove any pre-release suffix (e.g., -dev.N, -alpha.N, -beta.N, -rc.N)."
+            exit 1
+          fi
+
+          echo "✅ Version is final: $VERSION"
+
       - name: Get latest tag
         id: latest
         shell: bash
