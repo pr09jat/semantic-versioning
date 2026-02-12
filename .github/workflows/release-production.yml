@@ -104,7 +104,8 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --tags --force --prune --prune-tags
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "none")
+          LATEST_TAG=$(git tag --sort=-v:refname | head -n 1)
+          LATEST_TAG=${LATEST_TAG:-none}
           echo "Latest tag: ${LATEST_TAG}"
           echo "latest_tag=${LATEST_TAG}" >> "${GITHUB_OUTPUT}"
 
